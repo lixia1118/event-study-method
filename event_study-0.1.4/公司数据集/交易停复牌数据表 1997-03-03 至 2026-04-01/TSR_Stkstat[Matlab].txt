@@ -1,0 +1,12 @@
+[FileName,PathName]=uigetfile('D:\CSMAR_Matlab\*.*',' 选择数据文件');
+if FileName==0
+    return;
+end
+    str=horzcat(PathName,FileName);
+    try
+       [num,txt,rawdata]=xlsread(str);
+    catch
+        disp('请检查数据的存放路径是否正确,可能在以下路径的文件中不存在您存放的数据文件:')
+        disp(str)
+        return;
+    end
