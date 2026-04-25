@@ -8,7 +8,7 @@ A Python package for conducting event study analysis in finance. Supports Market
 
 Event study is a standard method in finance and accounting research to measure the impact of a specific event on the value of a firm. This package provides:
 
-- **Market Model**: \( R_{i,t} = \alpha_i + \beta_i R_{m,t} + \epsilon_{i,t} \)
+- **Market Model**: $\( R_{i,t} = \alpha_i + \beta_i R_{m,t} + \epsilon_{i,t} \$)
 - **Market-Adjusted Model**: \( R_{i,t} = R_{m,t} + \epsilon_{i,t} \)
 - **Fama-French Three Factor Model**: \( R_{i,t} - R_{f,t} = \alpha_i + \beta_1[R_{m,t} - R_{f,t}] + \beta_2 SMB_t + \beta_3 HML_t + \epsilon_{i,t} \)
 
