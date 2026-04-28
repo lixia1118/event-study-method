@@ -20,6 +20,15 @@ plt.rcParams.update({
     'font.sans-serif': ['STSong','Microsoft YaHei', 'SimHei', 'DejaVu Sans'],
     'axes.unicode_minus': False
 })
+
+# 可自行修改的配色
+line_color = '#1f77b4'   # 曲线颜色
+ci_color = '#1f77b4'     # 置信区间颜色（通常与曲线同色）
+bar_color = 'grey'       # AAR 柱状图颜色
+line_width = 1.8
+bar_width=0.3
+bar_alpha=0.4
+ci_alpha = 0.15
 class EventStudyPlotter:
     """
     专门用于事件研究结果可视化的类
@@ -747,10 +756,12 @@ def plot_from_event_analysis(
     figsize: Tuple[float, float] = (9, 6),
     save_path: Optional[str] = None,
     ax: Optional[plt.Axes] = None,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
 ) -> Union[plt.Figure, plt.Axes]:
     """
     从 event_analysis.py 的 df_aar 直接绘图（便捷函数）
-    
+
     Parameters
     ----------
     df_aar : pd.DataFrame
@@ -773,103 +784,159 @@ def plot_from_event_analysis(
         保存路径
     ax : plt.Axes, optional
         外部传入的坐标轴（用于子图）
-        
+
     Returns
     -------
     fig or ax : 图形对象
     """
     import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
-    
+    import pandas as pd
+    import seaborn as sns
+    from scipy.stats import t
+    from matplotlib.ticker import MaxNLocator
+
+
+
     # 获取所有可用的 event_window
     available_windows = df_aar['event_window_str'].unique()
-    
+
     # 自动选择：默认使用第一个事件窗口
     if event_window is None:
         event_window = available_windows[0]
         print(f"自动选择事件窗口: {event_window}")
-    
+
     if event_window not in available_windows:
         raise ValueError(f"指定的 event_window '{event_window}' 不存在。可用窗口: {list(available_windows)}")
-    
+
     if title is None:
         title = f'Event Study Results: {car_type} ({event_window})'
-    
-    subset = df_aar[df_aar['event_window_str'] == event_window].sort_values('relative_day_adj')
-    
+
+    subset = df_aar[df_aar['event_window_str'] == event_window].sort_values('relative_day_adj').copy()
+
     # 验证 car_type 是否存在
     if car_type not in subset.columns:
         available_cols = [col for col in ['CAAR', 'ACAR'] if col in subset.columns]
         raise ValueError(f"car_type '{car_type}' 不存在于数据中。可用列: {available_cols}")
-    
-    # 如果传入了 ax，在该坐标轴上绘制
-    if ax is not None:
-        ax.plot(subset['relative_day_adj'], subset[car_type],
-               color='b', linewidth=1.5, label=car_type,marker='o')
-        
-        if show_ci and f'Std. E. {car_type}' in subset.columns and len(subset) > 0:
-            df_val = subset['N_firms'].iloc[0] - 1 if 'N_firms' in subset.columns else len(subset) - 1
-            delta = subset[f'Std. E. {car_type}'].values * t.ppf((1 + confidence) / 2, max(1, df_val))
-            ax.fill_between(subset['relative_day_adj'],
-                           subset[car_type] - delta,
-                           subset[car_type] + delta,
-                           color='black', alpha=0.1, label=f'{int(confidence*100)}% CI')
-        
-        if show_aar and 'AAR' in subset.columns:
-            ax.bar(subset['relative_day_adj'], subset['AAR'],
-                  color='black', alpha=0.5, width=0.3, label='AAR')
-        
-        ax.axvline(x=0, color='black', linestyle='--', linewidth=2, alpha=0.7)
-        ax.axhline(y=0, color='black', linestyle=':', linewidth=0.8, alpha=0.5)
-        ax.set_xlabel('Relative Day', fontsize=11)
-        ax.set_ylabel('Return', fontsize=11)
-        ax.set_title(title, fontsize=13, fontweight='bold')
-        ax.legend(loc='upper left')
-        ax.grid(True, alpha=0.3)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        
-        return ax
-    else:
-        # 直接绘制，不依赖 EventStudyPlotter
+
+    # 关键：统一 x 坐标体系
+    subset = subset.reset_index(drop=True)
+    subset['x_pos'] = range(len(subset))
+
+    # 处理坐标轴
+    created_fig = False
+    if ax is None:
         fig, ax_plot = plt.subplots(figsize=figsize)
+        created_fig = True
+    else:
+        ax_plot = ax
+        fig = ax_plot.figure
+
+    # 折线图：CAAR / ACAR 等
+    sns.lineplot(
+        data=subset,
+        x='x_pos',
+        y=car_type,
+        sort=False,
+        color=line_color,
+        linewidth=line_width,
+        marker='o',
+        ax=ax_plot,
+        label=car_type
+    )
+
+    # 置信区间
+    if show_ci and f'Std. E. {car_type}' in subset.columns and len(subset) > 0:
+        df_val = subset['N_firms'].iloc[0] - 1 if 'N_firms' in subset.columns else len(subset) - 1
+        delta = subset[f'Std. E. {car_type}'].values * t.ppf((1 + confidence) / 2, max(1, df_val))
+
+        ax_plot.fill_between(
+            subset['x_pos'].values,
+            subset[car_type].values - delta,
+            subset[car_type].values + delta,
+            color=ci_color,
+            alpha=ci_alpha,
+            label=f'{int(confidence * 100)}% CI'
+        )
+
+    # 柱状图：AAR
+    if show_aar and 'AAR' in subset.columns:
+        sns.barplot(
+            data=subset,
+            x='x_pos',
+            y='AAR',
+            width=bar_width,
+            color=bar_color,
+            alpha=bar_alpha,
+            ax=ax_plot,
+            label='AAR'
+        )
+
+    # x轴标签显示真实 relative_day_adj
+    ax_plot.set_xticks(subset['x_pos'])
+    ax_plot.set_xticklabels(subset['relative_day_adj'].tolist())
+
+    # 标记事件日
+    if 0 in subset['relative_day_adj'].values:
+        zero_pos = subset.loc[subset['relative_day_adj'] == 0, 'x_pos'].iloc[0]
+        ax_plot.axvline(x=zero_pos, color='black', linestyle='--', linewidth=1, alpha=0.7)
+
+    ax_plot.axhline(y=0, color='black', linestyle=':', linewidth=0.8, alpha=0.5)
+    
+    # ===== 手动控制 y 轴范围，避免 CI 被截断 =====
+    y_values = [subset[car_type].values]
+
+    if show_ci and f'Std. E. {car_type}' in subset.columns and len(subset) > 0:
+        ci_upper = subset[car_type].values + delta
+        ci_lower = subset[car_type].values - delta
+        y_values.extend([ci_upper, ci_lower])
+
+    if show_aar and 'AAR' in subset.columns:
+        y_values.append(subset['AAR'].values)
+
+    y_all = np.concatenate(y_values)
+    y_min, y_max = y_all.min(), y_all.max()
+
+    # 留一点上下边距
+    padding = 0.08 * (y_max - y_min) if y_max > y_min else 0.02
+    ax_plot.set_ylim(y_min - padding, y_max + padding)
+    
+    # 标签设置
+    if xlabel is None:
+        ax_plot.set_xlabel('Relative Day', fontsize=11)
+    else:
+        ax_plot.set_xlabel(xlabel, fontsize=11)
+
+    if ylabel is not None:
+        ax_plot.set_ylabel(ylabel, fontsize=11)
+    elif ylabel == '':
+        ax_plot.set_ylabel('')
         
-        ax_plot.plot(subset['relative_day_adj'], subset[car_type],
-                    color='b', linewidth=1.5, label=car_type,marker='o')
-        
-        if show_ci and f'Std. E. {car_type}' in subset.columns and len(subset) > 0:
-            df_val = subset['N_firms'].iloc[0] - 1 if 'N_firms' in subset.columns else len(subset) - 1
-            delta = subset[f'Std. E. {car_type}'].values * t.ppf((1 + confidence) / 2, max(1, df_val))
-            ax_plot.fill_between(subset['relative_day_adj'],
-                                subset[car_type] - delta,
-                                subset[car_type] + delta,
-                                color='black', alpha=0.1, label=f'{int(confidence*100)}% CI')
-        
-        if show_aar and 'AAR' in subset.columns:
-            ax_plot.bar(subset['relative_day_adj'], subset['AAR'],
-                       color='black', alpha=0.5, width=0.3, label='AAR')
-        
-        ax_plot.axvline(x=0, color='black', linestyle='--', linewidth=1, alpha=0.7)
-        ax_plot.axhline(y=0, color='black', linestyle=':', linewidth=0.8, alpha=0.5)
-        # ax_plot.set_xlabel('Relative Day', fontsize=11)
-        # ax_plot.set_ylabel('Return', fontsize=11)
-        ax_plot.set_title(title, fontsize=13, fontweight='bold')
-        ax_plot.legend(loc='upper left')
-        # ax_plot.grid(True, alpha=0.3)
-        ax_plot.xaxis.set_major_locator(MaxNLocator(integer=True))
-        
-        # n_firms = subset['N_firms'].iloc[0] if 'N_firms' in subset.columns else len(subset)
-        # info_text = f'Event Window: {event_window}\nN = {n_firms}'
-        # ax_plot.text(0.02, 0.98, info_text, transform=ax_plot.transAxes,
-        #             fontsize=9, verticalalignment='top',
-        #             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        plt.tight_layout()
-        
-        if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f'Figure saved to: {save_path}')
-        
+    ax_plot.set_title(title, fontsize=13, fontweight='bold')
+
+    # 图例去重
+    handles, labels = ax_plot.get_legend_handles_labels()
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+    for h, l in zip(handles, labels):
+        if l not in seen:
+            unique_handles.append(h)
+            unique_labels.append(l)
+            seen.add(l)
+
+    ax_plot.legend(unique_handles, unique_labels, loc='upper left')
+
+    ax_plot.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f'Figure saved to: {save_path}')
+
+    if created_fig:
         return fig
+    return ax_plot
 
 
 def plot_company_event(
@@ -888,7 +955,7 @@ def plot_company_event(
 ) -> None:
     """
     从 df_ar_by_company 中选择特定公司、事件日、事件窗口绘制 AR 和 CAR
-    
+
     Parameters
     ----------
     df_ar_by_company : pd.DataFrame
@@ -915,106 +982,167 @@ def plot_company_event(
         保存路径
     ax : plt.Axes, optional
         外部传入的坐标轴（用于子图）
-        
+
     Returns
     -------
-    fig or ax : 图形对象
+    None
     """
     import matplotlib.pyplot as plt
-    
-    # 读取 CSV 后确保 stockid 为字符串（带前导零），避免 pandas 自动解析为整数
+    import seaborn as sns
+    import pandas as pd
+    from scipy.stats import t
+    from matplotlib.ticker import MaxNLocator
+
+    # 复制数据，避免修改原始 DataFrame
     df_ar_by_company = df_ar_by_company.copy()
+
+    # 读取 CSV 后确保 stockid 为字符串（带前导零）
     df_ar_by_company['stockid'] = df_ar_by_company['stockid'].astype(str).str.zfill(6)
 
-    # 转换 eventdate 为统一格式（CSV 读取后是字符串）
+    # 转换 eventdate 为统一格式
     df_ar_by_company['eventdate'] = pd.to_datetime(df_ar_by_company['eventdate'])
 
     available_stockids = df_ar_by_company['stockid'].unique()
     available_windows = df_ar_by_company['event_window_str'].unique()
     available_eventdates = df_ar_by_company['eventdate'].unique()
-    
+
     if stockid is None:
         stockid = available_stockids[0]
         print(f"自动选择股票: {stockid}")
+
     if event_window is None:
         event_window = available_windows[0]
         print(f"自动选择事件窗口: {event_window}")
+
     if eventdate is None:
         eventdate = available_eventdates[0]
         print(f"自动选择事件日: {pd.to_datetime(eventdate).strftime('%Y-%m-%d')}")
-    
-    # eventdate_comp 用于与已转换为 Timestamp 的列比较
+
+    # 用于比较
     eventdate_comp = pd.to_datetime(eventdate)
+
     subset = df_ar_by_company[
         (df_ar_by_company['stockid'] == stockid) &
         (df_ar_by_company['event_window_str'] == event_window) &
         (df_ar_by_company['eventdate'] == eventdate_comp)
-    ].sort_values('relative_day_adj')
+    ].sort_values('relative_day_adj').copy()
 
     if len(subset) == 0:
         avail_eventdates = df_ar_by_company[
             (df_ar_by_company['stockid'] == stockid) &
             (df_ar_by_company['event_window_str'] == event_window)
         ]['eventdate'].unique()
-        raise ValueError(f"没有找到匹配的数据: stockid={stockid}, eventdate={eventdate}, event_window={event_window}\n"
-                         f"该 stockid + event_window 下可用的 eventdate: {avail_eventdates}")
-    
+        raise ValueError(
+            f"没有找到匹配的数据: stockid={stockid}, eventdate={eventdate}, event_window={event_window}\n"
+            f"该 stockid + event_window 下可用的 eventdate: {avail_eventdates}"
+        )
+
     if title is None:
         title = f'AR and CAR: {stockid} on {eventdate_comp.strftime("%Y-%m-%d")} ({event_window})'
-    
+
+    # 记录是否为函数内部新建图形
+    created_fig = False
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
-    
-    # 柱状图：AR（黑色）
-    ax.bar(subset['relative_day_adj'], subset['AR'],
-           color='black', alpha=.5, width=0.3, label='AR')
-    
-    # 折线图：CAR（黑色）
-    ax.plot(subset['relative_day_adj'], subset['CAR'],
-            color='b', linewidth=1.5, label='CAR',marker='o')
-    
-    # 置信区间
+        created_fig = True
+    else:
+        fig = ax.figure
+
+    # =========================
+    # 关键修复：统一 x 坐标体系
+    # =========================
+    subset = subset.reset_index(drop=True)
+    subset['x_pos'] = range(len(subset))
+
+    # 柱状图：AR
+    sns.barplot(
+        data=subset,
+        width=bar_width,
+        x='x_pos',
+        y='AR',
+        ax=ax,
+        alpha=bar_alpha,
+        label='AR',
+        color=bar_color,     # 更论文风
+    )
+
+    # 折线图：CAR
+    sns.lineplot(
+        data=subset,
+        x='x_pos',
+        y='CAR',
+        sort=False,
+        marker='o',
+        linewidth=line_width,
+        ax=ax,
+        label='CAR',
+        color=line_color,   # 深蓝（推荐）
+    )
+
+    # x轴标签显示真实事件日
+    ax.set_xticks(subset['x_pos'])
+    ax.set_xticklabels(subset['relative_day_adj'].tolist())
+
+    # 置信区间：CAR
     if show_ci and 'Std. E. CAR' in subset.columns and len(subset) > 0:
         df_val = subset['df'].iloc[0] if 'df' in subset.columns else len(subset) - 1
         ci_multiplier = t.ppf((1 + confidence) / 2, max(1, df_val))
         delta = subset['Std. E. CAR'].values * ci_multiplier
-        label = f'{int(confidence * 100)}% CI'
-        ax.fill_between(subset['relative_day_adj'],
-                        subset['CAR'] - delta,
-                        subset['CAR'] + delta,
-                        color='black', alpha=0.1, label=label)
-    
-    # 标记事件日
-    ax.axvline(x=0, color='black', linestyle='--', linewidth=1, alpha=0.7)
+        ci_label = f'{int(confidence * 100)}% CI'
+
+        ax.fill_between(
+            subset['x_pos'].values,
+            subset['CAR'].values - delta,
+            subset['CAR'].values + delta,
+            alpha=ci_alpha,
+            label=ci_label,
+            color=ci_color,   # 浅灰
+        )
+
+    # 标记事件日和零线
+    if 0 in subset['relative_day_adj'].values:
+        zero_pos = subset.loc[subset['relative_day_adj'] == 0, 'x_pos'].iloc[0]
+        ax.axvline(x=zero_pos, color='black', linestyle='--', linewidth=1, alpha=0.7)
+
     ax.axhline(y=0, color='black', linestyle=':', linewidth=0.8, alpha=0.5)
-    
-    # x轴标签
-    if xlabel is not None:
+
+    # 标签设置
+    if xlabel is None:
+        ax.set_xlabel('Relative Day', fontsize=11)
+    else:
         ax.set_xlabel(xlabel, fontsize=11)
-    
-    # ax.set_ylabel('Return', fontsize=11)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=11)
+    elif ylabel == '':
+        ax.set_ylabel('')
+
     ax.set_title(title, fontsize=13, fontweight='bold')
-    ax.legend(loc='upper left')
-    # ax.grid(True, alpha=0.3)
+
+    # 去重 legend
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+    for h, l in zip(handles, labels):
+        if l not in seen:
+            unique_handles.append(h)
+            unique_labels.append(l)
+            seen.add(l)
+
+    ax.legend(unique_handles, unique_labels, loc='upper left')
+
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    
-    # 信息框
-    # final_car = subset['CAR'].iloc[-1]
-    # car_pvalue = subset['CAR_P-value'].iloc[-1]
-    # info_text = f'Final CAR: {final_car:.4f}\np-value: {car_pvalue:.4f}'
-    # ax.text(0.98, 0.98, info_text, transform=ax.transAxes,
-    #        fontsize=9, verticalalignment='top', horizontalalignment='right',
-    #        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
     plt.tight_layout()
+
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f'Figure saved to: {save_path}')
-        
     # 改为：如果传入了外部 ax 则不关闭，否则关闭
     if ax is None:
         plt.close(fig)  # 不显示图形
     return None  # 或者返回 None
-
 
 def plot_company_comparison(
     df_ar_by_company: pd.DataFrame,
@@ -1024,9 +1152,9 @@ def plot_company_comparison(
     figsize: Tuple[float, float] = (14, 7),
     colors: List[str] = None,
     title: str = None,
-    bar_width: float = 0.3,
-    ar_alpha: float = 0.5,
     save_path: str = None,
+    xlabel: Optional[str] = None,
+    ylabel: Optional[str] = None,
 ) -> plt.Figure:
     """
     将不同公司的 CAR 曲线和 AR 柱状图画在同一图中对比
@@ -1047,10 +1175,6 @@ def plot_company_comparison(
         颜色列表
     title : str, optional
         图表标题
-    bar_width : float
-        柱状图宽度（每个公司的宽度）
-    ar_alpha : float
-        AR 柱状图透明度
     save_path : str, optional
         保存路径，如 "output.png"
 
@@ -1059,8 +1183,15 @@ def plot_company_comparison(
     fig : matplotlib.figure.Figure
         图形对象
     """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    from matplotlib.ticker import MaxNLocator
+
     df = df_ar_by_company.copy()
     df['eventdate'] = pd.to_datetime(df['eventdate'])
+    df['stockid'] = df['stockid'].astype(str).str.zfill(6)
 
     if event_window_str is not None:
         df = df[df['event_window_str'] == event_window_str]
@@ -1071,72 +1202,130 @@ def plot_company_comparison(
         raise ValueError(f"事件日 {eventdate} 在数据中未找到")
 
     if stockids is not None:
+        stockids = [str(s).zfill(6) for s in stockids]
         df = df[df['stockid'].isin(stockids)]
 
     if df.empty:
         raise ValueError("筛选后没有可用数据")
 
-    unique_stocks = df['stockid'].unique()
+    unique_stocks = list(df['stockid'].unique())
     n_stocks = len(unique_stocks)
 
+    # 默认颜色
     if colors is None:
-        import matplotlib.colors as mcolors
-        colors = [mcolors.hsv_to_rgb((i/n_stocks, 0.7, 0.9)) for i in range(n_stocks)]
-        # colors = [mcolors.hsv_to_rgb((i/n_stocks, 0.7, 0.9)) for i in range(n_stocks)]
-    if title is None:
-        title = f'Comparison of AR/CAR for different companies (Event Date: {pd.to_datetime(eventdate).strftime("%Y-%m-%d")})'
+        palette = sns.color_palette("tab10", n_colors=n_stocks)
+        colors = palette[:n_stocks]
 
+    if title is None:
+        title = (
+            f'Comparison of AR/CAR for different companies '
+            f'(Event Date: {pd.to_datetime(eventdate).strftime("%Y-%m-%d")})'
+        )
+
+    # 相对日 -> 统一坐标位置
+    rel_days = sorted(df['relative_day_adj'].unique())
+    x_map = {day: i for i, day in enumerate(rel_days)}
+
+    figsize = figsize or (14, 7)
     fig, ax = plt.subplots(figsize=figsize)
 
-    # 获取相对天数排序
-    rel_days = sorted(df['relative_day_adj'].unique())
+    # 每个公司的单个柱宽
+    single_bar_width = bar_width / max(n_stocks, 1)
+
+    # 用于后续统一设置 y 轴范围
+    y_values = []
 
     for idx, stockid in enumerate(unique_stocks):
-        stock_data = df[df['stockid'] == stockid].sort_values('relative_day_adj')
+        stock_data = df[df['stockid'] == stockid].sort_values('relative_day_adj').copy()
+
+        # 统一 x 坐标
+        stock_data['x_pos'] = stock_data['relative_day_adj'].map(x_map)
+
         car_values = stock_data['CAR'].values
         ar_values = stock_data['AR'].values
-        time_vals = stock_data['relative_day_adj'].values
+        x_pos = stock_data['x_pos'].values
 
-        # CAR 曲线
-        ax.plot(time_vals, car_values,
-                color=colors[idx],
-                linewidth=2,
-                marker='o',
-                markersize=4,
-                label=f'{stockid} CAR')
+        # ===== CAR 折线：使用 sns.lineplot =====
+        sns.lineplot(
+            data=stock_data,
+            x='x_pos',
+            y='CAR',
+            sort=False,
+            color=colors[idx],
+            linewidth=2,
+            marker='o',
+            markersize=5,
+            ax=ax,
+            label=f'{stockid} CAR'
+        )
 
-        # AR 柱状图（使用透明度区分不同公司）
-        single_bar_width = bar_width / n_stocks
+        # ===== AR 柱状图：手动偏移，避免重叠 =====
         offset = (idx - n_stocks / 2 + 0.5) * single_bar_width
-        bar_positions = time_vals + offset
+        bar_positions = x_pos + offset
 
-        bar_colors = ['green' if v >= 0 else 'red' for v in ar_values]
-        ax.bar(bar_positions, ar_values,
-               width=single_bar_width * 0.9,
-               color=colors[idx],
-               alpha=ar_alpha,
-               label=f'{stockid} AR',
-               edgecolor='black',
-               linewidth=0.3)
+        ax.bar(
+            bar_positions,
+            ar_values,
+            width=single_bar_width * 0.9,
+            color=colors[idx],
+            alpha=bar_alpha,
+            label=f'{stockid} AR',
+            edgecolor='black',
+            linewidth=0.3
+        )
 
-    # 标记事件日
-    ax.axvline(x=0, color='black', linestyle='--', linewidth=1, alpha=0.7)
+        y_values.append(car_values)
+        y_values.append(ar_values)
+
+    # 事件日与零线
+    if 0 in x_map:
+        ax.axvline(x=x_map[0], color='black', linestyle='--', linewidth=1, alpha=0.7)
     ax.axhline(y=0, color='black', linestyle=':', linewidth=0.8, alpha=0.5)
 
-    # ax.set_xlabel('Relative Day', fontsize=11)
-    # ax.set_ylabel('Return', fontsize=11)
+    # x轴标签显示真实 relative day
+    ax.set_xticks(range(len(rel_days)))
+    ax.set_xticklabels(rel_days)
+
+    # 标题与标签
     ax.set_title(title, fontsize=13, fontweight='bold')
-    ax.legend(loc='best', frameon=True, ncol=2)
-    # ax.grid(True, alpha=0.3)
+    # 标签设置
+    if xlabel is None:
+        ax.set_xlabel('Relative Day', fontsize=11)
+    else:
+        ax.set_xlabel(xlabel, fontsize=11)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=11)
+    elif ylabel == '':
+        ax.set_ylabel('')
+    # 去重 legend
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+    for h, l in zip(handles, labels):
+        if l not in seen:
+            unique_handles.append(h)
+            unique_labels.append(l)
+            seen.add(l)
+
+    ax.legend(unique_handles, unique_labels, loc='best', frameon=True, ncol=2)
+
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
+    # 手动设置 y 轴范围，避免贴边
+    if y_values:
+        y_all = np.concatenate(y_values)
+        y_min, y_max = y_all.min(), y_all.max()
+        padding = 0.08 * (y_max - y_min) if y_max > y_min else 0.02
+        ax.set_ylim(y_min - padding, y_max + padding)
+
     plt.tight_layout()
-    
+
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    
-    return fig
 
+    return fig
 
 def list_available_selections(df_ar_by_company: pd.DataFrame) -> None:
     """列出 df_ar_by_company 中所有可用的选择"""
